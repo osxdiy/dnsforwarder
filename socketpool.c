@@ -49,6 +49,44 @@ typedef struct _SocketPool_Fetch_Arg
     void **DataOut;
 } SocketPool_Fetch_Arg;
 
+#ifndef _WIN32
+
+#define SOCKET_ERR_CONNECT_RETRIABLE(e)			\
+	((e) == EINTR || (e) == EINPROGRESS)
+
+#define SOCKET_SET_SOCKET_ERROR(errcode)		\
+		do { errno = (errcode); } while (0)
+
+#else
+/* Win32 */
+#define SOCKET_ERR_CONNECT_RETRIABLE(e)					\
+	((e) == WSAEWOULDBLOCK ||					\
+	    (e) == WSAEINTR ||						\
+	    (e) == WSAEINPROGRESS ||					\
+	    (e) == WSAEINVAL)
+
+#define SOCKET_SET_SOCKET_ERROR(errcode)		\
+	do { WSASetLastError(errcode); } while (0)
+
+#endif
+
+static int socket_finished_connecting(SOCKET Sock) {
+	int e;
+	socklen_t elen = sizeof(e);
+
+	if (getsockopt(Sock, SOL_SOCKET, SO_ERROR, (void*)&e, &elen) < 0)
+		return 0;
+
+	if (e) {
+		if (SOCKET_ERR_CONNECT_RETRIABLE(e))
+			return 0;
+		SOCKET_SET_SOCKET_ERROR(e);
+		return 0;
+	}
+
+	return 1;
+}
+
 static int SocketPool_Fetch_Inner(Bst *t,
                                   const SocketUnit *su,
                                   SocketPool_Fetch_Arg *Arg)
@@ -61,8 +99,7 @@ static int SocketPool_Fetch_Inner(Bst *t,
         {
             *(Arg->DataOut) = (void *)su->Data;
         }
-
-        return 1;
+        return socket_finished_connecting(Arg->Sock);
     }
 
     return 0;
